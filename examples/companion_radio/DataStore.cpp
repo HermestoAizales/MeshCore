@@ -57,8 +57,16 @@ void DataStore::begin() {
   #if defined(EXTRAFS) || defined(QSPIFLASH)
   migrateToSecondaryFS();
   #endif
+#elif defined(ESP32)
+  // init 'blob store' support for ESP32: use single /adv_blobs file with fixed records
+  // instead of many small individual files (saves significant Flash space)
+  checkAdvBlobFile();
+  // attempt to migrate old /bl/ files into /adv_blobs (one-time operation)
+  migrateBlobFiles();
+  // clean up old /bl/ directory (safe to call even if empty/none exist)
+  removeOldBlobDirectory();
 #else
-  // init 'blob store' support
+  // init 'blob store' support for other platforms (RP2040, etc)
   _fs->mkdir("/bl");
 #endif
 }
@@ -383,7 +391,9 @@ void DataStore::saveChannels(DataStoreHost* host) {
   }
 }
 
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+// BlobRec and helpers for NRF52/STM32/ESP32 platforms that use
+// a single /adv_blobs file with fixed-size records
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM) || defined(ESP32)
 
 #define MAX_ADVERT_PKT_LEN   (2 + 32 + PUB_KEY_SIZE + 4 + SIGNATURE_SIZE + MAX_ADVERT_DATA_SIZE)
 
@@ -394,6 +404,7 @@ struct BlobRec {
   uint8_t  data[MAX_ADVERT_PKT_LEN];
 };
 
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
 void DataStore::checkAdvBlobFile() {
   if (!_getContactsChannelsFS()->exists("/adv_blobs")) {
     File file = openWrite(_getContactsChannelsFS(), "/adv_blobs");
@@ -407,6 +418,24 @@ void DataStore::checkAdvBlobFile() {
     }
   }
 }
+#else
+// ESP32 version uses _fs directly (not _getContactsChannelsFS())
+void DataStore::checkAdvBlobFile() {
+  if (!_fs->exists("/adv_blobs")) {
+    File file = openWrite(_fs, "/adv_blobs");
+    if (file) {
+      BlobRec zeroes;
+      memset(&zeroes, 0, sizeof(zeroes));
+      for (int i = 0; i < MAX_BLOBRECS; i++) {     // pre-allocate to fixed size
+        file.write((uint8_t *) &zeroes, sizeof(zeroes));
+      }
+      file.close();
+    }
+  }
+}
+#endif
+
+#endif // NRF52 || STM32 || ESP32
 
 void DataStore::migrateToSecondaryFS() {
   // migrate old adv_blobs, contacts3 and channels2 files to secondary FS if they don't already exist
@@ -573,7 +602,203 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
 bool DataStore::deleteBlobByKey(const uint8_t key[], int key_len) {
   return true; // this is just a stub on NRF52/STM32 platforms
 }
+#elif defined(ESP32)
+
+// ESP32 blob storage: single /adv_blobs file with fixed-size BlobRec records.
+// This replaces the old approach of one small file per blob in /bl/<hex>,
+// which wasted significant Flash due to SPIFFS page alignment (256 bytes per file).
+
+void DataStore::migrateBlobFiles() {
+  // Check if migration is needed: /adv_blobs exists AND has content?
+  if (!_fs->exists("/adv_blobs")) {
+    // No /adv_blobs yet — check if there are old /bl/ files to migrate
+    File dir = _fs->open("/bl");
+    if (!dir) return; // no old blobs directory, nothing to migrate
+    
+    bool hasOldBlobs = false;
+    File entry = dir.openNextFile();
+    if (entry) {
+      hasOldBlobs = true;
+      entry.close();
+    }
+    dir.close();
+    
+    if (!hasOldBlobs) return; // empty directory
+    
+    MESH_DEBUG_PRINTLN("migrateBlobFiles: migrating old /bl/ files to /adv_blobs");
+    
+    // Create /adv_blobs with zeroed records first
+    checkAdvBlobFile();
+    
+    // Now migrate each /bl/<hex> file into a BlobRec slot
+    dir = _fs->open("/bl");
+    if (!dir) return;
+    
+    File blobFile = _fs->open("/adv_blobs", "r+");
+    if (!blobFile) {
+      MESH_DEBUG_PRINTLN("migrateBlobFiles: failed to open /adv_blobs for writing");
+      dir.close();
+      return;
+    }
+    
+    uint32_t pos = 0;
+    uint32_t min_timestamp = 0xFFFFFFFF;
+    uint32_t found_pos = 0;
+    BlobRec tmp;
+    
+    // Find first empty slot
+    blobFile.seek(0);
+    while (blobFile.read((uint8_t *)&tmp, sizeof(tmp)) == sizeof(tmp)) {
+      if (tmp.len == 0 && tmp.key[0] == 0) {
+        found_pos = pos;
+        break;
+      }
+      if (tmp.timestamp < min_timestamp) {
+        min_timestamp = tmp.timestamp;
+        found_pos = pos;
+      }
+      pos += sizeof(tmp);
+    }
+    
+    // Migrate files
+    entry = dir.openNextFile();
+    while (entry && found_pos < (uint32_t)(MAX_BLOBRECS * sizeof(tmp))) {
+      // Read old blob data
+      uint8_t buf[MAX_ADVERT_PKT_LEN];
+      int dataLen = entry.read(buf, sizeof(buf));
+      entry.close();
+      
+      if (dataLen > 0 && dataLen <= MAX_ADVERT_PKT_LEN) {
+        // Extract key prefix from filename (first 7 bytes of pub_key)
+        String fname = entry.name();
+        // fname is like "A1B2C3D4E5F6G7" (hex of first 8 bytes)
+        // We store 7 bytes prefix
+        memset(&tmp, 0, sizeof(tmp));
+        // Parse hex filename back to key bytes (up to 7)
+        int keyBytes = 0;
+        for (int i = 0; i < (int)fname.length() && keyBytes < 7; i += 2) {
+          char hex[3] = {fname[i], fname[i+1], 0};
+          tmp.key[keyBytes++] = (uint8_t)strtoul(hex, NULL, 16);
+        }
+        tmp.len = dataLen;
+        tmp.timestamp = _clock->getCurrentTime();
+        memcpy(tmp.data, buf, dataLen);
+        
+        blobFile.seek(found_pos);
+        blobFile.write((uint8_t *)&tmp, sizeof(tmp));
+        
+        MESH_DEBUG_PRINTLN("migrateBlobFiles: migrated %s (%d bytes) at slot %d", 
+                          fname.c_str(), dataLen, found_pos / sizeof(tmp));
+        
+        found_pos += sizeof(tmp);
+      }
+      
+      entry = dir.openNextFile();
+    }
+    
+    blobFile.close();
+    dir.close();
+    
+    MESH_DEBUG_PRINTLN("migrateBlobFiles: migration complete");
+  }
+}
+
+void DataStore::removeOldBlobDirectory() {
+  // Remove all files in /bl/ and the directory itself
+  if (!_fs->exists("/bl")) return;
+  
+  File dir = _fs->open("/bl");
+  if (!dir) return;
+  
+  File entry = dir.openNextFile();
+  while (entry) {
+    String fname = String("/bl/") + entry.name();
+    entry.close();
+    _fs->remove(fname);
+    MESH_DEBUG_PRINTLN("removeOldBlobDirectory: removed %s", fname.c_str());
+    entry = dir.openNextFile();
+  }
+  dir.close();
+  _fs->rmdir("/bl");
+  MESH_DEBUG_PRINTLN("removeOldBlobDirectory: removed /bl/");
+}
+
+uint8_t DataStore::getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) {
+  File file = openRead(_fs, "/adv_blobs");
+  uint8_t len = 0;  // 0 = not found
+  if (file) {
+    BlobRec tmp;
+    while (file.read((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp)) {
+      if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {  // match by 7 byte prefix
+        len = tmp.len;
+        memcpy(dest_buf, tmp.data, len);
+        break;
+      }
+    }
+    file.close();
+  }
+  return len;
+}
+
+bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], uint8_t len) {
+  if (len < PUB_KEY_SIZE+4+SIGNATURE_SIZE || len > MAX_ADVERT_PKT_LEN) return false;
+  checkAdvBlobFile();
+  File file = _fs->open("/adv_blobs", "r+");
+  if (file) {
+    uint32_t pos = 0, found_pos = 0;
+    uint32_t min_timestamp = 0xFFFFFFFF;
+
+    // search for matching key OR evict by oldest timestamp
+    BlobRec tmp;
+    file.seek(0);
+    while (file.read((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp)) {
+      if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {  // match by 7 byte prefix
+        found_pos = pos;
+        break;
+      }
+      if (tmp.timestamp < min_timestamp) {
+        min_timestamp = tmp.timestamp;
+        found_pos = pos;
+      }
+      pos += sizeof(tmp);
+    }
+
+    memcpy(tmp.key, key, sizeof(tmp.key));  // store 7 byte prefix of key
+    memcpy(tmp.data, src_buf, len);
+    tmp.len = len;
+    tmp.timestamp = _clock->getCurrentTime();
+
+    file.seek(found_pos);
+    file.write((uint8_t *) &tmp, sizeof(tmp));
+
+    file.close();
+    return true;
+  }
+  return false; // error
+}
+
+bool DataStore::deleteBlobByKey(const uint8_t key[], int key_len) {
+  File file = _fs->open("/adv_blobs", "r+");
+  if (file) {
+    BlobRec tmp;
+    while (file.read((uint8_t *)&tmp, sizeof(tmp)) == sizeof(tmp)) {
+      if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {
+        // Zero out the record to mark as deleted
+        memset(&tmp, 0, sizeof(tmp));
+        file.seek(file.position() - sizeof(tmp));
+        file.write((uint8_t *)&tmp, sizeof(tmp));
+        file.close();
+        return true;
+      }
+    }
+    file.close();
+  }
+  return false; // not found
+}
+
 #else
+
+// Non-ESP32, non-NRF52/STM32 fallback (e.g. RP2040): one file per blob
 inline void makeBlobPath(const uint8_t key[], int key_len, char* path, size_t path_size) {
   char fname[18];
   if (key_len > 8) key_len = 8; // just use first 8 bytes (prefix)
