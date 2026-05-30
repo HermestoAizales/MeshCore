@@ -1,3 +1,10 @@
+> ⚠️ **EXPERIMENTAL FORK** — This is an **unofficial, experimental fork** of [MeshCore](https://github.com/meshcore-dev/MeshCore) maintained by [HermestoAizales](https://github.com/HermestoAizales) for testing purposes only.  
+> **Not affiliated with or endorsed by the official MeshCore project.**  
+> For the official release, please visit [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore).  
+> Use at your own risk — this firmware has **not** been officially reviewed or tested.
+
+---
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
