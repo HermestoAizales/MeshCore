@@ -437,6 +437,8 @@ void DataStore::checkAdvBlobFile() {
 
 #endif // NRF52 || STM32 || ESP32
 
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+
 void DataStore::migrateToSecondaryFS() {
   // migrate old adv_blobs, contacts3 and channels2 files to secondary FS if they don't already exist
   if (!_fsExtra->exists("/adv_blobs")) {
@@ -545,6 +547,8 @@ void DataStore::migrateToSecondaryFS() {
   }
 }
 
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+
 uint8_t DataStore::getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) {
   File file = openRead(_getContactsChannelsFS(), "/adv_blobs");
   uint8_t len = 0;  // 0 = not found
@@ -570,7 +574,6 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
     uint32_t pos = 0, found_pos = 0;
     uint32_t min_timestamp = 0xFFFFFFFF;
 
-    // search for matching key OR evict by oldest timestmap
     BlobRec tmp;
     file.seek(0);
     while (file.read((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp)) {
@@ -582,11 +585,10 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
         min_timestamp = tmp.timestamp;
         found_pos = pos;
       }
-
       pos += sizeof(tmp);
     }
 
-    memcpy(tmp.key, key, sizeof(tmp.key));  // just record 7 byte prefix of key
+    memcpy(tmp.key, key, sizeof(tmp.key));
     memcpy(tmp.data, src_buf, len);
     tmp.len = len;
     tmp.timestamp = _clock->getCurrentTime();
@@ -599,10 +601,14 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
   }
   return false; // error
 }
+
 bool DataStore::deleteBlobByKey(const uint8_t key[], int key_len) {
   return true; // this is just a stub on NRF52/STM32 platforms
 }
-#elif defined(ESP32)
+
+#endif // NRF52 || STM32
+
+#if defined(ESP32)
 
 // ESP32 blob storage: single /adv_blobs file with fixed-size BlobRec records.
 // This replaces the old approach of one small file per blob in /bl/<hex>,
@@ -729,7 +735,7 @@ uint8_t DataStore::getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_b
   if (file) {
     BlobRec tmp;
     while (file.read((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp)) {
-      if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {  // match by 7 byte prefix
+      if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {
         len = tmp.len;
         memcpy(dest_buf, tmp.data, len);
         break;
@@ -748,11 +754,10 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
     uint32_t pos = 0, found_pos = 0;
     uint32_t min_timestamp = 0xFFFFFFFF;
 
-    // search for matching key OR evict by oldest timestamp
     BlobRec tmp;
     file.seek(0);
     while (file.read((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp)) {
-      if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {  // match by 7 byte prefix
+      if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {
         found_pos = pos;
         break;
       }
@@ -763,7 +768,7 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
       pos += sizeof(tmp);
     }
 
-    memcpy(tmp.key, key, sizeof(tmp.key));  // store 7 byte prefix of key
+    memcpy(tmp.key, key, sizeof(tmp.key));
     memcpy(tmp.data, src_buf, len);
     tmp.len = len;
     tmp.timestamp = _clock->getCurrentTime();
@@ -783,7 +788,6 @@ bool DataStore::deleteBlobByKey(const uint8_t key[], int key_len) {
     BlobRec tmp;
     while (file.read((uint8_t *)&tmp, sizeof(tmp)) == sizeof(tmp)) {
       if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {
-        // Zero out the record to mark as deleted
         memset(&tmp, 0, sizeof(tmp));
         file.seek(file.position() - sizeof(tmp));
         file.write((uint8_t *)&tmp, sizeof(tmp));
