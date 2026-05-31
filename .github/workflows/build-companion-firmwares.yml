@@ -21,10 +21,45 @@ jobs:
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment
 
-      - name: Build Firmwares
+      - name: Build Standard Firmwares
         env:
           FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION }}
         run: /usr/bin/env bash build.sh build-companion-firmwares
+
+      - name: Rename standard outputs
+        run: |
+          mkdir -p out/standard
+          cp out/*.bin out/*.uf2 out/*.hex out/*.zip out/standard/ 2>/dev/null || true
+          rm -f out/*.bin out/*.uf2 out/*.hex out/*.zip
+
+      - name: Build Observer Firmwares (MESH_PACKET_LOGGING=1)
+        env:
+          FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION }}-obs
+          PLATFORMIO_BUILD_FLAGS: -D MESH_PACKET_LOGGING=1
+        run: /usr/bin/env bash build.sh build-companion-firmwares
+
+      - name: Tag observer outputs
+        run: |
+          mkdir -p out/observer
+          for f in out/*.bin out/*.uf2 out/*.hex out/*.zip; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            # Insert '-obs' before the .bin/.uf2/.hex/.zip extension
+            if [[ "$base" =~ \.(bin|uf2|hex|zip)$ ]]; then
+              ext="${BASH_REMATCH[1]}"
+              name="${base%.*}"
+              mv "$f" "out/observer/${name}-obs.${ext}"
+            fi
+          done
+          rm -f out/*.bin out/*.uf2 out/*.hex out/*.zip
+
+      - name: Merge outputs
+        run: |
+          mv out/standard/* out/ 2>/dev/null || true
+          mv out/observer/* out/ 2>/dev/null || true
+          rmdir out/standard out/observer 2>/dev/null || true
+          echo "=== Final output ==="
+          ls -la out/ | head -30
 
       - name: Upload Workflow Artifacts
         uses: actions/upload-artifact@v4
@@ -37,6 +72,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           name: Companion Firmware ${{ env.GIT_TAG_VERSION }}
-          body: ""
+          body: "## Changes\n- ESP32 Blob Storage Optimization (single /adv_blobs file, saves ~30 KB Flash)\n- T-Beam: MAX_CONTACTS=350, MAX_GROUP_CHANNELS=40\n- Observer builds with MESH_PACKET_LOGGING=1 (filename suffix: -obs)\n\n**⚠️ Experimental build — use at your own risk.**"
           draft: true
           files: out/*
