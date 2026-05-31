@@ -34,12 +34,30 @@ The blob functions (`getBlobByKey`, `putBlobByKey`, `deleteBlobByKey`) are wrapp
 
 **Files:** `variants/lilygo_tbeam_SX1262/platformio.ini`, `variants/lilygo_tbeam_SX1276/platformio.ini`
 
-| Parameter | Upstream | Our Fork |
-|---|---|---|
-| `MAX_GROUP_CHANNELS` | 8 | **40** |
-| `MAX_CONTACTS` | 160 | **350** |
+| Parameter | Upstream | Our Fork | Current Limit |
+|---|---|---|---|
+| `MAX_GROUP_CHANNELS` | 8 | 8 | 8 (OBSERVED: 164/8 overflows DRAM by 24 bytes) |
+| `MAX_CONTACTS` | 160 | 163 | 163 (hard limit with current code) |
 
-Both values are safe for ESP32 (sufficient RAM and SPIFFS flash).
+### ⚠️ DRAM Constraint (2026-05-31 test)
+Our blob optimization adds RAM overhead. The ESP32 only has 1.25MB DRAM.
+Empirically tested limits with our fork (SX1262):
+
+| Configuration | Result |
+|---|---|
+| 160/8 (upstream default) | ✅ SUCCESS |
+| 163/8 | ✅ SUCCESS |
+| 164/8 | ❌ overflow by 24 bytes |
+| 200/20 | ❌ overflow by 7568 bytes |
+| 350/40 | ❌ overflow by 37072 bytes |
+
+**MEM Optimization Potential (per ContactInfo ≈ 188 bytes):**
+- `out_path[MAX_PATH_SIZE=64]` — fixe 64 Bytes, oft nur wenige genutzt
+- `shared_secret[32]` — könnte Pointer statt Array sein
+- `name[32]` — eventuell kleiner
+- `gps_lat/gps_lon/sync_since` — 12 Bytes, wenn nicht gebraucht
+
+TODO: Investigate dynamic path storage to free ~48 bytes per contact ~7-8KB total headroom.
 
 ## Observer Builds
 
