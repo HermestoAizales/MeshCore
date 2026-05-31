@@ -36,8 +36,8 @@ The blob functions (`getBlobByKey`, `putBlobByKey`, `deleteBlobByKey`) are wrapp
 
 | Parameter | Upstream | Our Fork | Current Limit |
 |---|---|---|---|
-| `MAX_GROUP_CHANNELS` | 8 | 8 | 8 (OBSERVED: 164/8 overflows DRAM by 24 bytes) |
-| `MAX_CONTACTS` | 160 | 163 | 163 (hard limit with current code) |
+| `MAX_GROUP_CHANNELS` | 8 | **18** | 160/18 tested ✅, 160/20 overflows by 48 bytes |
+| `MAX_CONTACTS` | 160 | 160 | kept at upstream default |
 
 ### ⚠️ DRAM Constraint (2026-05-31 test)
 Our blob optimization adds RAM overhead. The ESP32 only has 1.25MB DRAM.
