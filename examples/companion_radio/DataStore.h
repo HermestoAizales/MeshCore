@@ -23,10 +23,6 @@ class DataStore {
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM) || defined(ESP32)
   void checkAdvBlobFile();
 #endif
-#if defined(ESP32)
-  void migrateBlobFiles();
-  void removeOldBlobDirectory();
-#endif
 
 public:
   DataStore(FILESYSTEM& fs, mesh::RTCClock& clock);
