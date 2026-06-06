@@ -29,7 +29,7 @@ jobs:
           RELEASE_BODY: ${{ github.event.release.body }}
         run: |
           python3 << 'PYEOF'
-          import json, os, urllib.request
+          import json, os, urllib.request, re
 
           tag = os.environ["RELEASE_TAG"]
           body = os.environ.get("RELEASE_BODY", "")
@@ -46,23 +46,37 @@ jobs:
           with urllib.request.urlopen(req) as resp:
               release = json.loads(resp.read())
 
-          files = []
+          all_files = []
           for asset in release.get("assets", []):
-              files.append({"name": asset["name"], "url": asset["browser_download_url"]})
+              all_files.append({"name": asset["name"], "url": asset["browser_download_url"]})
 
-          entry = {"type": rel_type, "version": version, "notes": body, "files": files}
+          # Split into standard and observer files
+          std_files = [f for f in all_files if "-obs" not in f["name"]]
+          obs_files = [f for f in all_files if "-obs" in f["name"]]
 
-          # Read existing releases.json, replace or prepend
+          # Read existing releases.json
           rpath = "flasher-repo/releases.json"
           with open(rpath) as f:
               existing = json.load(f)
-          existing = [e for e in existing if not (e.get("version") == version and e.get("type") == rel_type)]
-          existing.insert(0, entry)
+
+          # Remove old entries for this version (both std and obs)
+          existing = [e for e in existing if e.get("version") != version]
+
+          # Add standard entry
+          if std_files:
+              existing.insert(0, {"type": rel_type, "version": version, "notes": body, "files": std_files})
+
+          # Add observer entry
+          if obs_files:
+              obs_body = body
+              if "MESH_PACKET_LOGGING" not in obs_body:
+                  obs_body += "\n\n### Observer Build\n- MESH_PACKET_LOGGING enabled — logs all mesh packets via Serial\n- Debug output: type, route, SNR, RSSI, hash"
+              existing.insert(0, {"type": rel_type + "-obs", "version": version, "notes": obs_body, "files": obs_files})
 
           with open(rpath, "w") as f:
               json.dump(existing, f, indent=2)
 
-          print(f"Updated: {rel_type} {version} with {len(files)} files")
+          print(f"Updated: {rel_type} {version}: {len(std_files)} std + {len(obs_files)} obs files")
           PYEOF
 
       - name: Commit and push
