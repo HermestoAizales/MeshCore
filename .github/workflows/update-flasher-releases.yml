@@ -1,0 +1,74 @@
+name: Update Flasher releases.json
+
+permissions:
+  contents: write
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-releases:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Flasher repo
+        uses: actions/checkout@v4
+        with:
+          repository: HermestoAizales/flasher.meshcore.io
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: flasher-repo
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build releases.json from GitHub Release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, urllib.request
+
+          tag = os.environ["RELEASE_TAG"]
+          body = os.environ.get("RELEASE_BODY", "")
+
+          # Determine type from tag prefix
+          prefix = tag.split("-")[0]
+          rel_type = {"companion": "companion", "repeater": "repeater", "room-server": "room-server"}.get(prefix, "other")
+          version = tag.split("-", 1)[1] if "-" in tag else tag
+
+          # Fetch release assets from GitHub API
+          api_url = f"https://api.github.com/repos/HermestoAizales/MeshCore/releases/tags/{tag}"
+          req = urllib.request.Request(api_url)
+          req.add_header("Accept", "application/vnd.github.v3+json")
+          with urllib.request.urlopen(req) as resp:
+              release = json.loads(resp.read())
+
+          files = []
+          for asset in release.get("assets", []):
+              files.append({"name": asset["name"], "url": asset["browser_download_url"]})
+
+          entry = {"type": rel_type, "version": version, "notes": body, "files": files}
+
+          # Read existing releases.json, replace or prepend
+          rpath = "flasher-repo/releases.json"
+          with open(rpath) as f:
+              existing = json.load(f)
+          existing = [e for e in existing if not (e.get("version") == version and e.get("type") == rel_type)]
+          existing.insert(0, entry)
+
+          with open(rpath, "w") as f:
+              json.dump(existing, f, indent=2)
+
+          print(f"Updated: {rel_type} {version} with {len(files)} files")
+          PYEOF
+
+      - name: Commit and push
+        working-directory: flasher-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add releases.json
+          git diff --cached --quiet || git commit -m "chore: update releases.json for ${{ github.event.release.tag_name }}" && git push

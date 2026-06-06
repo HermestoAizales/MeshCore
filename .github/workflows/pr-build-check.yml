@@ -1,22 +1,11 @@
-name: PR Build Check
+name: Build Check
 
 on:
   pull_request:
     branches: [main, dev]
-    paths:
-      - 'src/**'
-      - 'examples/**'
-      - 'variants/**'
-      - 'platformio.ini'
-      - '.github/workflows/pr-build-check.yml'
   push:
     branches: [main, dev]
-    paths:
-      - 'src/**'
-      - 'examples/**'
-      - 'variants/**'
-      - 'platformio.ini'
-      - '.github/workflows/pr-build-check.yml'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -25,6 +14,9 @@ jobs:
       fail-fast: false
       matrix:
         environment:
+          # ESP32
+          - Tbeam_SX1262_companion_radio_ble
+          - Tbeam_SX1262_repeater
           # ESP32-S3 (most common platform)
           - Heltec_v3_companion_radio_ble
           - Heltec_v3_repeater

@@ -71,6 +71,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           name: Companion Firmware ${{ env.GIT_TAG_VERSION }}
-          body: ""
+          body: "## Changes\n- T-Beam: MAX_CONTACTS=160, MAX_GROUP_CHANNELS=18\n- Observer builds with MESH_PACKET_LOGGING=1 (filename suffix: -obs)\n\n**⚠️ Experimental build — use at your own risk.**"
           draft: true
           files: out/*
