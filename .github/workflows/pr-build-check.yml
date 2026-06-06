@@ -17,6 +17,7 @@ jobs:
           # ESP32
           - Tbeam_SX1262_companion_radio_ble
           - Tbeam_SX1262_repeater
+          # ESP32-S3 (most common platform)
           - Heltec_v3_companion_radio_ble
           - Heltec_v3_repeater
           - Heltec_v3_room_server
@@ -30,10 +31,14 @@ jobs:
           - wio-e5-mini_repeater
           # ESP32-C6
           - LilyGo_Tlora_C6_repeater_
+          # LR1110 (nRF52)
+          - wio_wm1110_repeater
+          # SX1276 (ESP32)
+          - Tbeam_SX1276_repeater
 
     steps:
       - name: Clone Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment
